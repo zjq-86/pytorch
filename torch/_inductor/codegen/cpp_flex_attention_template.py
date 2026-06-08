@@ -636,7 +636,7 @@ FLEX_ATTENTION_TEMPLATE = r"""
               v_data + i_kv * vStrideB + j_kv * vStrideH + n * vStrideN;
           // Fallback Half brgemm is slower than micro gemm
           if (!std::is_same_v<scalar_t, at::Half>) {
-            // On SVE, brgemm falls back to gemm because the oneDNN ukernel path is x86-only.
+            // On AArch64, brgemm falls back to gemm because the oneDNN ukernel path is x86-only.
             at::native::cpublas::brgemm(
                   cur_qSplitSize,
                   headSize_v,
@@ -1458,7 +1458,7 @@ class CppFlexAttentionTemplate(CppTemplate):
         value = kernel.permute(self.input_nodes[2], [0, 2, 1, 3])
         self.accumulate_dtype = torch.float
         self.input_dtype = query.layout.dtype
-        use_blas_gemm = torch.cpu._is_sve_supported()
+        use_blas_gemm = torch.cpu._is_sve_supported() or torch.cpu._is_neon_supported()
 
         num_threads = parallel_num_threads()
         if not isinstance(self.output_node, ir.IRNode):
@@ -1536,7 +1536,7 @@ class CppFlexAttentionTemplate(CppTemplate):
         from torch._inductor.codegen.cpp_micro_gemm import CppMicroGemmFP32Vec
         from torch._inductor.virtualized import V
 
-        use_blas_gemm = torch.cpu._is_sve_supported()
+        use_blas_gemm = torch.cpu._is_sve_supported() or torch.cpu._is_neon_supported()
         emit_transpose_b_micro_gemm = not use_blas_gemm
 
         micro_gemm_trans: CppMicroGemmFP32Vec | None = None
