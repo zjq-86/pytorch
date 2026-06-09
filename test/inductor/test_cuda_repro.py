@@ -1005,7 +1005,6 @@ class CudaReproTests(TestCase):
             check_lowp=False,
         )
 
-    @skipIfXpu(msg="TypeError, torch-xpu-ops: 3004")
     def test_memory_history_inductor(self):
         def called_inside_compile(x, w, b):
             a = x @ w + b
@@ -2433,7 +2432,6 @@ class CudaReproTests(TestCase):
             out2 = m(input_tensor)
             self.assertEqual(out, out2, atol=1e-3, rtol=1e-3)
 
-    @skipIfXpu(msg="cudagraph is not supported on xpu")
     @skipIfCachingAllocatorDisabled
     @config.patch("triton.cudagraphs", True)
     def test_cpu_index(self):
