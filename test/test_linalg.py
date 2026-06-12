@@ -5751,6 +5751,62 @@ class TestLinalg(TestCase):
                 with self.assertRaisesRegex(RuntimeError, 'LU without pivoting is not implemented on the CPU'):
                     f(torch.empty(1, 2, 2), pivot=False)
 
+    @slowTest
+    @onlyCUDA
+    @skipCUDAIfNoCusolver
+    @setLinalgBackendsToDefaultFinally
+    @dtypes(*floating_and_complex_types())
+    def test_linalg_batched_lu_stability_large_inputs(self, device, dtype):
+        # Check whether LU factorization is stable.
+        # We use the criterion from Netlib/MAGMA:
+        # scaled_residul < K, where
+        # scaled_residual = ||PLU - A|| / (||A|| * n * eps)
+        # Netlib uses 1-norm, while MAGMA uses Frobenius norm.
+        if dtype in (torch.float, torch.double):
+            compute_dtype = torch.double
+        else:
+            compute_dtype = torch.cdouble
+        eps = torch.finfo(dtype).eps
+
+        # low batch regime shapes
+        bsl = (4, 8)
+        nsl = (259, 1027, 2033)
+
+        # high batch regime shapes
+        bsh = (300, 1100)
+        nsh = (257,)
+
+        shapes = itertools.chain(itertools.product(bsl, nsl), itertools.product(bsh, nsh))
+
+        make_well_conditioned = partial(make_fullrank_matrices_with_distinct_singular_values, device=device, dtype=dtype)
+        make_ill_conditioned = partial(torch.randn, device=device, dtype=dtype)
+        make_input_methods = (make_well_conditioned, make_ill_conditioned)
+        norm = partial(torch.linalg.norm, dim=(-2, -1), ord=1)
+
+        torch.backends.cuda.preferred_linalg_library("cusolver")
+        for (b, n), make_input in product(shapes, make_input_methods):
+            A = make_input(b, n, n)
+            P, L, U = torch.linalg.lu(A)
+            A, P, L, U = map(lambda t: t.to(compute_dtype), (A, P, L, U))
+
+            # Compute scaled residual as per Netlib
+            # ||PLU - A||_1 / (||A||_1 * n * eps)
+            scale = norm(A).mul_(n * eps)
+            scaled_residual = norm(P @ L @ U - A).div_(scale)
+
+            # Very conservative - Netlib uses 30, and so is MAGMA, see:
+            #
+            # Netlib:
+            # https://github.com/Reference-LAPACK/lapack/blob/master/TESTING/LIN/dget01.f
+            # https://github.com/Reference-LAPACK/lapack/blob/master/TESTING/LIN/dchkge.f
+            # https://github.com/Reference-LAPACK/lapack/blob/master/TESTING/dtest.in
+            #
+            # MAGMA:
+            # https://github.com/icl-utk-edu/magma/blob/master/testing/testing_zgetrf.cpp
+            # https://github.com/icl-utk-edu/magma/blob/master/testing/magma_util.cpp
+            K = 1.0
+            self.assertTrue((scaled_residual < K).all())
+
     @precisionOverride({torch.float32: 1e-2, torch.complex64: 1e-2})
     @skipCUDAIfNoCusolver
     @skipCPUIfNoLapack
