@@ -5781,31 +5781,45 @@ class TestLinalg(TestCase):
         make_well_conditioned = partial(make_fullrank_matrices_with_distinct_singular_values, device=device, dtype=dtype)
         make_ill_conditioned = partial(torch.randn, device=device, dtype=dtype)
         make_input_methods = (make_well_conditioned, make_ill_conditioned)
-        norm = partial(torch.linalg.norm, dim=(-2, -1), ord=1)
+        matrix_norm = partial(torch.linalg.norm, dim=(-2, -1))
 
         torch.backends.cuda.preferred_linalg_library("cusolver")
         for (b, n), make_input in product(shapes, make_input_methods):
             A = make_input(b, n, n)
             P, L, U = torch.linalg.lu(A)
             A, P, L, U = map(lambda t: t.to(compute_dtype), (A, P, L, U))
+            residual = P @ L @ U - A
 
-            # Compute scaled residual as per Netlib
-            # ||PLU - A||_1 / (||A||_1 * n * eps)
-            scale = norm(A).mul_(n * eps)
-            scaled_residual = norm(P @ L @ U - A).div_(scale)
+            # Netlib uses 1-norm, MAGMA uses Frobenius
+            for norm in (partial(matrix_norm, ord=1), partial(matrix_norm, ord='fro')):
+                # Compute scaled residual
+                # ||PLU - A|| / (||A|| * n * eps)
+                scale = norm(A).mul_(n * eps)
+                scaled_residual = norm(residual).div_(scale)
 
-            # Very conservative - Netlib uses 30, and so is MAGMA, see:
-            #
-            # Netlib:
-            # https://github.com/Reference-LAPACK/lapack/blob/master/TESTING/LIN/dget01.f
-            # https://github.com/Reference-LAPACK/lapack/blob/master/TESTING/LIN/dchkge.f
-            # https://github.com/Reference-LAPACK/lapack/blob/master/TESTING/dtest.in
-            #
-            # MAGMA:
-            # https://github.com/icl-utk-edu/magma/blob/master/testing/testing_zgetrf.cpp
-            # https://github.com/icl-utk-edu/magma/blob/master/testing/magma_util.cpp
-            K = 1.0
-            self.assertTrue((scaled_residual < K).all())
+                # Very conservative - Netlib uses 30, and so is MAGMA, see:
+                #
+                # Netlib:
+                # https://github.com/Reference-LAPACK/lapack/blob/master/TESTING/LIN/dget01.f
+                # https://github.com/Reference-LAPACK/lapack/blob/master/TESTING/LIN/dchkge.f
+                # https://github.com/Reference-LAPACK/lapack/blob/master/TESTING/dtest.in
+                #
+                # MAGMA:
+                # https://github.com/icl-utk-edu/magma/blob/master/testing/testing_zgetrf.cpp
+                # https://github.com/icl-utk-edu/magma/blob/master/testing/magma_util.cpp
+                K = 1.0
+                self.assertTrue((scaled_residual < K).all())
+
+        # Check info vector. Note, it is 1-based
+        A = make_well_conditioned(5, 300, 300)
+        A[0, :, 150:] = 0
+        A[2, :, :150] = 0
+        A[4, :, 17] = 0
+        _, _, info = torch.linalg.lu_factor_ex(A)
+        self.assertEqual(info[0], 151)
+        self.assertEqual(info[2], 1)
+        self.assertEqual(info[4], 18)
+        self.assertTrue(info[1] == info[3] == 0)
 
     @precisionOverride({torch.float32: 1e-2, torch.complex64: 1e-2})
     @skipCUDAIfNoCusolver
