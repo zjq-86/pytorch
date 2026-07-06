@@ -50,10 +50,10 @@ struct LUTuning {
 };
 
 // Pre-tuned constants per compute capability
-static constexpr LUTuning tuning_sm80  = {128,  8, 2048, {64, 256}, {64, 256}};  // A100 (swept 2026-06-10)
-static constexpr LUTuning tuning_sm89  = {512, 14, 1024, {48, 256}, {48, 256}};  // L40S (swept 2026-06-10)
+static constexpr LUTuning tuning_sm80  = {768, 10,  512, {56, 256}, {64, 256}};  // A100 (swept 2026-07-02)
+static constexpr LUTuning tuning_sm89  = {768, 14,  512, {64, 384}, {96, 256}};  // L40S (swept 2026-07-05)
 static constexpr LUTuning tuning_sm90  = {512, 10,  512, {40, 256}, {64, 256}};  // H100 (swept 2026-07-01)
-static constexpr LUTuning tuning_sm100 = {256,  8, 1536, {16, 256}, {32, 256}};  // GB200 (swept 2026-06-11)
+static constexpr LUTuning tuning_sm100 = {512, 10,  512, {72, 256}, {64, 256}};  // GB200 (swept 2026-07-05)
 
 inline LUTuning get_tuning() {
   const auto* prop = at::cuda::getCurrentDeviceProperties();
