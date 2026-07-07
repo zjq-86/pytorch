@@ -433,6 +433,7 @@ batched_panel_full_kernel(
         thrust::swap(A[src], A[dst]);
       }
     }
+    __syncthreads();
 
     // 3. Scale (divide by diagonal - skip if zero for singular matrices)
     if (tid == 0) {
