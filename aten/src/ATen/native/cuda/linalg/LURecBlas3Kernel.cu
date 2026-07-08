@@ -73,7 +73,7 @@ inline LUTuning get_tuning() {
 // pivinfo: absolute permutation vector (one per batch, size m).
 template <typename scalar_t>
 struct LUWorkspace {
-  LUWorkspace(const Tensor& input, int nb) : A{const_cast<Tensor&>(input)} {
+  LUWorkspace(const Tensor& input, int nb) {
     batch_count = cuda_int_cast(batchCount(input), "batchCount");
     int m = cuda_int_cast(input.size(-2), "input.size(-2)");
     int n = cuda_int_cast(input.size(-1), "input.size(-1)");
@@ -89,7 +89,6 @@ struct LUWorkspace {
     pivinfo_stride = m;
   }
 
-  Tensor& A;
   int batch_count;
   Tensor buffer;
 
