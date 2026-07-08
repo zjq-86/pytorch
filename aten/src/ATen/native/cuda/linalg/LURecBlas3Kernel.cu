@@ -53,7 +53,7 @@ struct LUTuning {
 static constexpr LUTuning tuning_sm80  = {768, 10,  512, {56, 256}, {64, 256}};  // A100 (swept 2026-07-02)
 static constexpr LUTuning tuning_sm89  = {768, 14,  512, {64, 384}, {96, 256}};  // L40S (swept 2026-07-05)
 static constexpr LUTuning tuning_sm90  = {512, 10,  512, {40, 256}, {64, 256}};  // H100 (swept 2026-07-01)
-static constexpr LUTuning tuning_sm100 = {512, 10,  512, {72, 256}, {64, 256}};  // GB200 (swept 2026-07-05)
+static constexpr LUTuning tuning_sm100 = {512, 32,  512, {128, 256}, {128, 256}};  // match MAGMA nb=128 recnb=32
 
 inline LUTuning get_tuning() {
   const auto* prop = at::cuda::getCurrentDeviceProperties();
@@ -365,9 +365,8 @@ void batched_apply_pivots_parallel(
   auto ncols = col_hi - col_lo;
   if (ncols <= 0 || nb <= 0) return;
 
-  // Max columns per tile limited by shared memory: nb * swp_width * sizeof(scalar_t) <= 48KB
-  int swp_width = (48 * 1024) / (nb * sizeof(scalar_t));
-  swp_width = std::min(swp_width, ncols);
+  // Small tile width for high occupancy (matches MAGMA's SWP_WIDTH=4)
+  int swp_width = std::min(4, ncols);
   int col_tiles = (ncols + swp_width - 1) / swp_width;
   size_t shmem = nb * swp_width * sizeof(scalar_t);
   auto grid = dim3(col_tiles, 1, batch_count);
@@ -379,6 +378,212 @@ void batched_apply_pivots_parallel(
     ncols, col_lo, swp_width
   );
   C10_CUDA_KERNEL_LAUNCH_CHECK();
+}
+
+// Register-resident fused panel factorization (similar to MAGMA's sgetf2_fused_device).
+// Each thread owns one row of the panel in registers (rA[WIDTH]).
+// Pivot search via shared-memory parallel reduction, virtual row swap via rowid tracking,
+// in-register scale and rank-1 update. One global read at start, one write at end.
+// blockDim.x = nrows (number of rows in the submatrix), one block per batch.
+// Constraint: nrows <= 1024 (max threads per block).
+template <typename scalar_t, int WIDTH>
+__global__ void
+batched_panel_fused_kernel(
+  scalar_t* __restrict__ dA, int64_t matrix_stride,
+  int lda, int m,
+  int col_start,
+  int ipiv_stride,
+  int* __restrict__ dipiv,
+  int* __restrict__ dinfo
+) {
+  using real_t = c10::scalar_value_type<scalar_t>::type;
+
+  const int tx = threadIdx.x;
+  const int batch = blockIdx.x;
+  const int nrows = m - col_start;
+
+  auto* A = dA + batch * matrix_stride;
+
+  // Shared memory layout:
+  //   sx[WIDTH]         - pivot row values (for broadcast)
+  //   dsx[nrows]        - absolute values for reduction
+  //   isx[nrows]        - indices for reduction
+  //   sipiv[WIDTH]      - pivot indices
+  extern __shared__ char smem_raw[];
+  scalar_t* sx = reinterpret_cast<scalar_t*>(smem_raw);
+  real_t* dsx = reinterpret_cast<real_t*>(sx + WIDTH);
+  int* isx = reinterpret_cast<int*>(dsx + nrows);
+  int* sipiv = reinterpret_cast<int*>(isx + nrows);
+
+  // Each thread loads its full row into registers
+  scalar_t rA[WIDTH];
+  #pragma unroll
+  for (int i = 0; i < WIDTH; i++) {
+    rA[i] = (tx < nrows) ? A[LinOff(col_start + tx, col_start + i, lda)] : static_cast<scalar_t>(0);
+  }
+
+  int rowid = tx;
+  int linfo = (col_start == 0) ? 0 : dinfo[batch];
+
+  if (tx < WIDTH) {
+    sipiv[tx] = 0;
+  }
+
+  for (int i = 0; i < WIDTH; i++) {
+    // 1. Write abs value to shared memory using current logical row position
+    dsx[rowid] = std::abs(rA[i]);
+    isx[tx] = tx;
+    __syncthreads();
+
+    // 2. Parallel reduction for argmax over rows [i, nrows)
+    // Cross-warp steps via shared memory
+    if (nrows - i > 512) { if (tx < 512 && tx + 512 < nrows - i) { if (dsx[i+tx] < dsx[i+tx+512] || (dsx[i+tx] == dsx[i+tx+512] && isx[i+tx+512] < isx[i+tx])) { dsx[i+tx] = dsx[i+tx+512]; isx[i+tx] = isx[i+tx+512]; } } __syncthreads(); }
+    if (nrows - i > 256) { if (tx < 256 && tx + 256 < nrows - i) { if (dsx[i+tx] < dsx[i+tx+256] || (dsx[i+tx] == dsx[i+tx+256] && isx[i+tx+256] < isx[i+tx])) { dsx[i+tx] = dsx[i+tx+256]; isx[i+tx] = isx[i+tx+256]; } } __syncthreads(); }
+    if (nrows - i > 128) { if (tx < 128 && tx + 128 < nrows - i) { if (dsx[i+tx] < dsx[i+tx+128] || (dsx[i+tx] == dsx[i+tx+128] && isx[i+tx+128] < isx[i+tx])) { dsx[i+tx] = dsx[i+tx+128]; isx[i+tx] = isx[i+tx+128]; } } __syncthreads(); }
+    if (nrows - i >  64) { if (tx <  64 && tx +  64 < nrows - i) { if (dsx[i+tx] < dsx[i+tx+ 64] || (dsx[i+tx] == dsx[i+tx+ 64] && isx[i+tx+ 64] < isx[i+tx])) { dsx[i+tx] = dsx[i+tx+ 64]; isx[i+tx] = isx[i+tx+ 64]; } } __syncthreads(); }
+    if (nrows - i >  32) { if (tx <  32 && tx +  32 < nrows - i) { if (dsx[i+tx] < dsx[i+tx+ 32] || (dsx[i+tx] == dsx[i+tx+ 32] && isx[i+tx+ 32] < isx[i+tx])) { dsx[i+tx] = dsx[i+tx+ 32]; isx[i+tx] = isx[i+tx+ 32]; } } __syncthreads(); }
+    // Warp-level reduction for final 32 elements
+    real_t rx_abs_max;
+    int max_id;
+    if (tx < 32) {
+      real_t val = (tx < nrows - i) ? dsx[i + tx] : static_cast<real_t>(-1);
+      int idx = (tx < nrows - i) ? isx[i + tx] : tx;
+      unsigned mask = 0xffffffff;
+      #pragma unroll
+      for (int s = 16; s >= 1; s >>= 1) {
+        real_t other_val = __shfl_down_sync(mask, val, s);
+        int other_idx = __shfl_down_sync(mask, idx, s);
+        if (other_val > val || (other_val == val && other_idx < idx)) { val = other_val; idx = other_idx; }
+      }
+      if (tx == 0) { dsx[i] = val; isx[i] = idx; }
+    }
+    __syncthreads();
+    rx_abs_max = dsx[i];
+    max_id = isx[i];
+
+    linfo = (rx_abs_max == static_cast<real_t>(0) && linfo == 0) ? (col_start + i + 1) : linfo;
+
+    if (tx == 0) {
+      sipiv[i] = max_id;
+    }
+    __syncthreads();
+
+    // 3. Pivot row broadcasts its values to shared memory
+    if (rowid == max_id) {
+      #pragma unroll
+      for (int j = 0; j < WIDTH; j++) {
+        sx[j] = rA[j];
+      }
+    }
+    __syncthreads();
+
+    // 4. Virtual row swap
+    if (rx_abs_max != static_cast<real_t>(0)) {
+      if (rowid == max_id) {
+        rowid = i;
+      } else if (rowid == i) {
+        rowid = max_id;
+      }
+    }
+    __syncthreads();
+
+    // 5. Scale and rank-1 update (in registers)
+    scalar_t reg = (rx_abs_max == static_cast<real_t>(0))
+        ? static_cast<scalar_t>(1)
+        : static_cast<scalar_t>(1) / sx[i];
+
+    if (rowid > i) {
+      rA[i] *= reg;
+      #pragma unroll
+      for (int j = i + 1; j < WIDTH; j++) {
+        rA[j] -= rA[i] * sx[j];
+      }
+    }
+  }
+
+  // Write info
+  if (tx == 0) {
+    dinfo[batch] = linfo;
+  }
+
+  // Write pivots (1-based, absolute)
+  if (tx < WIDTH) {
+    dipiv[batch * ipiv_stride + col_start + tx] = sipiv[tx] + col_start + 1;
+  }
+
+  // Write back results using remapped rowid
+  if (tx < nrows) {
+    #pragma unroll
+    for (int i = 0; i < WIDTH; i++) {
+      A[LinOff(col_start + rowid, col_start + i, lda)] = rA[i];
+    }
+  }
+}
+
+// Dispatch helper for fused panel kernel (WIDTH 1-32)
+template <typename scalar_t>
+bool try_launch_fused_panel(
+  scalar_t* dA, int64_t matrix_stride, int lda, int m,
+  int col_start, int nb,
+  int* dipiv, int ipiv_stride,
+  int* dinfo, int batch_count
+) {
+  int nrows = m - col_start;
+  // Fused kernel needs one thread per row, max 1024
+  if (nrows > 1024 || nb > 32) return false;
+
+  // Shared memory: WIDTH * sizeof(scalar_t) + nrows * sizeof(real_t) + nrows * sizeof(int) + WIDTH * sizeof(int)
+  using real_t = c10::scalar_value_type<scalar_t>::type;
+  size_t shmem = nb * sizeof(scalar_t) + nrows * sizeof(real_t) + nrows * sizeof(int) + nb * sizeof(int);
+
+  dim3 grid(batch_count);
+  dim3 threads(nrows);
+
+  auto stream = at::cuda::getCurrentCUDAStream();
+
+  #define LAUNCH_FUSED(W) \
+    batched_panel_fused_kernel<scalar_t, W><<<grid, threads, shmem, stream>>>( \
+      dA, matrix_stride, lda, m, col_start, ipiv_stride, dipiv, dinfo)
+
+  switch (nb) {
+    case  1: LAUNCH_FUSED( 1); break;
+    case  2: LAUNCH_FUSED( 2); break;
+    case  3: LAUNCH_FUSED( 3); break;
+    case  4: LAUNCH_FUSED( 4); break;
+    case  5: LAUNCH_FUSED( 5); break;
+    case  6: LAUNCH_FUSED( 6); break;
+    case  7: LAUNCH_FUSED( 7); break;
+    case  8: LAUNCH_FUSED( 8); break;
+    case  9: LAUNCH_FUSED( 9); break;
+    case 10: LAUNCH_FUSED(10); break;
+    case 11: LAUNCH_FUSED(11); break;
+    case 12: LAUNCH_FUSED(12); break;
+    case 13: LAUNCH_FUSED(13); break;
+    case 14: LAUNCH_FUSED(14); break;
+    case 15: LAUNCH_FUSED(15); break;
+    case 16: LAUNCH_FUSED(16); break;
+    case 17: LAUNCH_FUSED(17); break;
+    case 18: LAUNCH_FUSED(18); break;
+    case 19: LAUNCH_FUSED(19); break;
+    case 20: LAUNCH_FUSED(20); break;
+    case 21: LAUNCH_FUSED(21); break;
+    case 22: LAUNCH_FUSED(22); break;
+    case 23: LAUNCH_FUSED(23); break;
+    case 24: LAUNCH_FUSED(24); break;
+    case 25: LAUNCH_FUSED(25); break;
+    case 26: LAUNCH_FUSED(26); break;
+    case 27: LAUNCH_FUSED(27); break;
+    case 28: LAUNCH_FUSED(28); break;
+    case 29: LAUNCH_FUSED(29); break;
+    case 30: LAUNCH_FUSED(30); break;
+    case 31: LAUNCH_FUSED(31); break;
+    case 32: LAUNCH_FUSED(32); break;
+    default: return false;
+  }
+  #undef LAUNCH_FUSED
+
+  C10_CUDA_KERNEL_LAUNCH_CHECK();
+  return true;
 }
 
 // cuBLAS Batched TRSM only works with square inputs,
@@ -452,9 +657,6 @@ batched_panel_full_kernel(
 
     // 4. Rank-1 update (linearized)
     if (rows_below > 0 && update_cols > 0) {
-      // rows_below can be padded to be divisible by 32,
-      // but the boundary condition check inflicts more damage
-      // than warp threads attempting to read from/write to different columns
       auto numel = rows_below * update_cols;
       for (int idx = tid; idx < numel; idx += BS) {
         auto local_row = idx % rows_below;
@@ -483,8 +685,14 @@ void lu_batched_panel_recursive(
   LUWorkspace<scalar_t>& ws,
   const LUTuning& tuning
 ) {
-  // Base case: use flat panel factorization
+  // Base case: use fused register-resident panel if possible, else fall back
   if (nb <= tuning.recnb) {
+    if (try_launch_fused_panel<scalar_t>(
+          dA, matrix_stride, lda, m,
+          col_start, nb, dipiv, ipiv_stride, dinfo, batch_count)) {
+      return;
+    }
+    // Fallback: nrows > 1024 or nb > 32
     auto grid = dim3(1, 1, batch_count);
     if ((m - col_start) > tuning.panel_threshold) {
       batched_panel_full_kernel<scalar_t, 1024><<<grid, 1024, 0, at::cuda::getCurrentCUDAStream()>>>(
