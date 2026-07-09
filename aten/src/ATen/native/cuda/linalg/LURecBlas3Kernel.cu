@@ -520,7 +520,7 @@ batched_panel_fused_kernel(
   }
 }
 
-// Dispatch helper for fused panel kernel (WIDTH 1-32)
+// Dispatch helper for register-resident fused panel kernel (WIDTH 1-32)
 template <typename scalar_t>
 bool try_launch_fused_panel(
   scalar_t* dA, int64_t matrix_stride, int lda, int m,
@@ -590,7 +590,7 @@ bool try_launch_fused_panel(
 // hence the need for this kernel for rectangular inputs
 template <typename scalar_t, int BS>
 __global__ void __launch_bounds__(BS)
-batched_panel_full_kernel(
+batched_panel_colserial_fused_kernel(
   scalar_t* __restrict__ dA, int64_t matrix_stride,
   int lda, int m,
   int col_start, int nb,
@@ -695,13 +695,13 @@ void lu_batched_panel_recursive(
     // Fallback: nrows > 1024 or nb > 32
     auto grid = dim3(1, 1, batch_count);
     if ((m - col_start) > tuning.panel_threshold) {
-      batched_panel_full_kernel<scalar_t, 1024><<<grid, 1024, 0, at::cuda::getCurrentCUDAStream()>>>(
+      batched_panel_colserial_fused_kernel<scalar_t, 1024><<<grid, 1024, 0, at::cuda::getCurrentCUDAStream()>>>(
         dA, matrix_stride, lda, m,
         col_start, nb,
         ipiv_stride, dipiv, dinfo
       );
     } else {
-      batched_panel_full_kernel<scalar_t, 256><<<grid, 256, 0, at::cuda::getCurrentCUDAStream()>>>(
+      batched_panel_colserial_fused_kernel<scalar_t, 256><<<grid, 256, 0, at::cuda::getCurrentCUDAStream()>>>(
         dA, matrix_stride, lda, m,
         col_start, nb,
         ipiv_stride, dipiv, dinfo
