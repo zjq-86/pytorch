@@ -187,7 +187,7 @@ __device__ __forceinline__ void warp_argmax(real_t& val, int& idx) {
   for (int offset = 16; offset > 0; offset >>= 1) {
     real_t other_val = __shfl_down_sync(0xffffffff, val, offset);
     int    other_idx = __shfl_down_sync(0xffffffff, idx, offset);
-    if (other_val > val) {
+    if ((other_val > val) || (other_val == val && other_idx < idx)) {
       val = other_val;
       idx = other_idx;
     }
@@ -443,23 +443,15 @@ batched_panel_fused_kernel(
     if (nrows - i >  64) { if (tx <  64 && tx +  64 < nrows - i) { if (dsx[i+tx] < dsx[i+tx+ 64] || (dsx[i+tx] == dsx[i+tx+ 64] && isx[i+tx+ 64] < isx[i+tx])) { dsx[i+tx] = dsx[i+tx+ 64]; isx[i+tx] = isx[i+tx+ 64]; } } __syncthreads(); }
     if (nrows - i >  32) { if (tx <  32 && tx +  32 < nrows - i) { if (dsx[i+tx] < dsx[i+tx+ 32] || (dsx[i+tx] == dsx[i+tx+ 32] && isx[i+tx+ 32] < isx[i+tx])) { dsx[i+tx] = dsx[i+tx+ 32]; isx[i+tx] = isx[i+tx+ 32]; } } __syncthreads(); }
     // Warp-level reduction for final 32 elements
-    real_t rx_abs_max;
-    int max_id;
     if (tx < 32) {
       real_t val = (tx < nrows - i) ? dsx[i + tx] : static_cast<real_t>(-1);
       int idx = (tx < nrows - i) ? isx[i + tx] : tx;
-      unsigned mask = 0xffffffff;
-      #pragma unroll
-      for (int s = 16; s >= 1; s >>= 1) {
-        real_t other_val = __shfl_down_sync(mask, val, s);
-        int other_idx = __shfl_down_sync(mask, idx, s);
-        if (other_val > val || (other_val == val && other_idx < idx)) { val = other_val; idx = other_idx; }
-      }
+      warp_argmax(val, idx);
       if (tx == 0) { dsx[i] = val; isx[i] = idx; }
     }
     __syncthreads();
-    rx_abs_max = dsx[i];
-    max_id = isx[i];
+    auto rx_abs_max = dsx[i];
+    auto max_id = isx[i];
 
     linfo = (rx_abs_max == static_cast<real_t>(0) && linfo == 0) ? (col_start + i + 1) : linfo;
 
