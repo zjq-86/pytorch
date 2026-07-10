@@ -431,16 +431,16 @@ batched_panel_register_resident_fused_kernel(
   if (tid < NB) { sipiv[tid] = 0; };
 
   for (int i = 0, ir = i + tid, irows = nrows; i < NB; ++i, ++ir, --irows) {
-    // 1. Write abs values to shared memory
+    // 1. Write abs value to shared memory using current logical row position
     sabsval[curr_row] = std::abs(rA[i]);
     sargmax[tid] = tid;
     __syncthreads();
 
     // 2. Parallel reduction for argmax over rows [i, nrows)
-    if (irows > 512 && tid < 512 && tid + 512 < irows) { AGGREGATE_ARGMAX(sabsval[ir], sargmax[ir], sabsval[ir + 512], sargmax[ir + 512]); __syncthreads(); };
-    if (irows > 256 && tid < 256 && tid + 256 < irows) { AGGREGATE_ARGMAX(sabsval[ir], sargmax[ir], sabsval[ir + 256], sargmax[ir + 256]); __syncthreads(); };
-    if (irows > 128 && tid < 128 && tid + 128 < irows) { AGGREGATE_ARGMAX(sabsval[ir], sargmax[ir], sabsval[ir + 128], sargmax[ir + 128]); __syncthreads(); };
-    if (irows > 64 && tid < 64 && tid + 64 < irows) { AGGREGATE_ARGMAX(sabsval[ir], sargmax[ir], sabsval[ir + 64], sargmax[ir + 64]); __syncthreads(); };
+    if (irows > 512) { if (tid < 512 && tid + 512 < irows) { AGGREGATE_ARGMAX(sabsval[ir], sargmax[ir], sabsval[ir + 512], sargmax[ir + 512]); } __syncthreads(); }
+    if (irows > 256) { if (tid < 256 && tid + 256 < irows) { AGGREGATE_ARGMAX(sabsval[ir], sargmax[ir], sabsval[ir + 256], sargmax[ir + 256]); } __syncthreads(); }
+    if (irows > 128) { if (tid < 128 && tid + 128 < irows) { AGGREGATE_ARGMAX(sabsval[ir], sargmax[ir], sabsval[ir + 128], sargmax[ir + 128]); } __syncthreads(); }
+    if (irows >  64) { if (tid <  64 && tid +  64 < irows) { AGGREGATE_ARGMAX(sabsval[ir], sargmax[ir], sabsval[ir +  64], sargmax[ir +  64]); } __syncthreads(); }
     if (tid < 32) {
       auto val = (tid < irows) ? sabsval[ir] : static_cast<real_t>(-1);
       auto idx = (tid < irows) ? sargmax[ir] : tid;
@@ -456,21 +456,22 @@ batched_panel_register_resident_fused_kernel(
 
     auto abs_max = sabsval[i];
     auto argmax = sargmax[i];
-    linfo = (abs_max == 0 && linfo == 0) ? (col_start + i + 1) : linfo;
+    linfo = (abs_max == static_cast<real_t>(0) && linfo == 0) ? (col_start + i + 1) : linfo;
 
     if (tid == 0) {
       sipiv[i] = argmax;
     }
+    __syncthreads();
 
-    // 3. Pivot row (tid) broadcasts its values to shared memory
+    // 3. Pivot row broadcasts its values to shared memory
     if (curr_row == argmax) {
       #pragma unroll
-      for (int j = 0; j < NB; ++j) { spivrow[i] = rA[i]; }
+      for (int j = 0; j < NB; ++j) { spivrow[j] = rA[j]; }
     }
     __syncthreads();
 
     // 4. Virtual row swap
-    if (abs_max != 0) {
+    if (abs_max != static_cast<real_t>(0)) {
       if (curr_row == argmax) {
         curr_row = i;
       } else if (curr_row == i) {
