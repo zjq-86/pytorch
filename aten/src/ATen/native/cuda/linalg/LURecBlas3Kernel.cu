@@ -494,7 +494,7 @@ batched_panel_register_resident_fused_kernel(
 
   // Write pivots (1-based, absolute)
   if (tid < NB) {
-    dipiv[batch * ipiv_stride + col_start + tid] = spivrow[tid] + col_start + 1;
+    dipiv[batch * ipiv_stride + col_start + tid] = sipiv[tid] + col_start + 1;
   }
 
   // Write back results using curr_row
@@ -658,7 +658,7 @@ bool try_launch_fused_panel(
   auto stream = at::cuda::getCurrentCUDAStream();
 
   #define LAUNCH_FUSED(W) \
-    batched_panel_fused_kernel<scalar_t, W><<<grid, threads, shmem, stream>>>( \
+    batched_panel_register_resident_fused_kernel<scalar_t, W><<<grid, threads, shmem, stream>>>( \
       dA, matrix_stride, lda, m, col_start, ipiv_stride, dipiv, dinfo)
 
   switch (nb) {
