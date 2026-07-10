@@ -181,16 +181,19 @@ void trailing_matrix_update(
 }
 
 // Argmax Abs helpers {
+#define AGGREGATE_ARGMAX(val, idx, other_val, other_idx) \
+  if ((other_val > val) || (other_val == val && other_idx < idx)) { \
+    val = other_val; \
+    idx = other_idx; \
+  }
+
 template <typename real_t>
 __device__ __forceinline__ void warp_argmax(real_t& val, int& idx) {
   #pragma unroll
   for (int offset = 16; offset > 0; offset >>= 1) {
     real_t other_val = __shfl_down_sync(0xffffffff, val, offset);
     int    other_idx = __shfl_down_sync(0xffffffff, idx, offset);
-    if ((other_val > val) || (other_val == val && other_idx < idx)) {
-      val = other_val;
-      idx = other_idx;
-    }
+    AGGREGATE_ARGMAX(val, idx, other_val, other_idx);
   }
 }
 
@@ -386,6 +389,123 @@ void batched_apply_pivots_parallel(
 // in-register scale and rank-1 update. One global read at start, one write at end.
 // blockDim.x = nrows (number of rows in the submatrix), one block per batch.
 // Constraint: nrows <= 1024 (max threads per block).
+template <typename scalar_t, int NB>
+__global__ void
+batched_panel_register_resident_fused_kernel(
+  scalar_t* __restrict__ dA, int64_t matrix_stride,
+  int lda, int m,
+  int col_start,
+  int ipiv_stride,
+  int* __restrict__ dipiv,
+  int* __restrict__ dinfo
+) {
+  using real_t = c10::scalar_value_type<scalar_t>::type;
+
+  const int tid = threadIdx.x;
+  const int batch = blockIdx.x;
+  const int nrows = m - col_start;
+  auto* A = dA + batch * matrix_stride;
+  int curr_row = tid; // tracks "virtual" row swaps
+  int linfo = (col_start == 0) ? 0 : dinfo[batch];
+
+  // Shared memory layout:
+  // spivrow[NB] - pivot row values
+  // sabsval[nrows] - abs values (for argmax reduction to find pivots)
+  // sargmax[nrows] - argmax indices of abs values (for argmax reduction to find pivots)
+  // sipiv[NB]   - pivot indices
+  extern __shared__ char smem_raw[];
+  scalar_t* spivrow = reinterpret_cast<scalar_t*>(smem_raw);
+  real_t* sabsval = reinterpret_cast<real_t*>(spivrow + NB);
+  int* sargmax = reinterpret_cast<int*>(sabsval + nrows);
+  int* sipiv = reinterpret_cast<int*>(sargmax + nrows);
+
+  // Each thread owns its full row stored in registers
+  scalar_t rA[NB];
+  #pragma unroll
+  for (int i = 0; i < NB; ++i) {
+    rA[i] = (tid < nrows)
+      ? A[LinOff(col_start + tid, col_start + i, lda)]
+      : static_cast<scalar_t>(0);
+  }
+
+  if (tid < NB) { sipiv[tid] = 0; };
+
+  for (int i = 0, ir = i + tid, irows = nrows; i < NB; ++i, ++ir, --irows) {
+    // 1. Write abs values to shared memory
+    sabsval[curr_row] = std::abs(rA[i]);
+    sargmax[tid] = tid;
+    __syncthreads();
+
+    // 2. Parallel reduction for argmax over rows [i, nrows)
+    if (irows > 512 && tid < 512 && tid + 512 < irows) { AGGREGATE_ARGMAX(sabsval[ir], sargmax[ir], sabsval[ir + 512], sargmax[ir + 512]); __syncthreads(); };
+    if (irows > 256 && tid < 256 && tid + 256 < irows) { AGGREGATE_ARGMAX(sabsval[ir], sargmax[ir], sabsval[ir + 256], sargmax[ir + 256]); __syncthreads(); };
+    if (irows > 128 && tid < 128 && tid + 128 < irows) { AGGREGATE_ARGMAX(sabsval[ir], sargmax[ir], sabsval[ir + 128], sargmax[ir + 128]); __syncthreads(); };
+    if (irows > 64 && tid < 64 && tid + 64 < irows) { AGGREGATE_ARGMAX(sabsval[ir], sargmax[ir], sabsval[ir + 64], sargmax[ir + 64]); __syncthreads(); };
+    if (tid < 32) {
+      auto val = (tid < irows) ? sabsval[ir] : static_cast<real_t>(-1);
+      auto idx = (tid < irows) ? sargmax[ir] : tid;
+      if (tid + 32 < irows) {
+        auto other_val = sabsval[ir + 32];
+        auto other_idx = sargmax[ir + 32];
+        AGGREGATE_ARGMAX(val, idx, other_val, other_idx);
+      }
+      warp_argmax(val, idx);
+      if (tid == 0) { sabsval[i] = val; sargmax[i] = idx; }
+    }
+    __syncthreads();
+
+    auto abs_max = sabsval[i];
+    auto argmax = sargmax[i];
+    linfo = (abs_max == 0 && linfo == 0) ? (col_start + i + 1) : linfo;
+
+    if (tid == 0) {
+      sipiv[i] = argmax;
+    }
+
+    // 3. Pivot row (tid) broadcasts its values to shared memory
+    if (curr_row == argmax) {
+      #pragma unroll
+      for (int j = 0; j < NB; ++j) { spivrow[i] = rA[i]; }
+    }
+    __syncthreads();
+
+    // 4. Virtual row swap
+    if (abs_max != 0) {
+      if (curr_row == argmax) {
+        curr_row = i;
+      } else if (curr_row == i) {
+        curr_row = argmax;
+      }
+    }
+    __syncthreads();
+
+    // 5. Scale and rank-1 update (in registers)
+    if (curr_row > i) {
+      rA[i] /= spivrow[i];
+      #pragma unroll
+      for (int j = i + 1; j < NB; ++j) {
+        rA[j] -= rA[i] * spivrow[j];
+      }
+    }
+  }
+
+  // Write info
+  if (tid == 0) { dinfo[batch] = linfo; }
+
+  // Write pivots (1-based, absolute)
+  if (tid < NB) {
+    dipiv[batch * ipiv_stride + col_start + tid] = spivrow[tid] + col_start + 1;
+  }
+
+  // Write back results using curr_row
+  if (tid < nrows) {
+    #pragma unroll
+    for (int i = 0; i < NB; ++i) {
+      A[LinOff(col_start + curr_row, col_start + i, lda)] = rA[i];
+    }
+  }
+}
+
 template <typename scalar_t, int WIDTH>
 __global__ void
 batched_panel_fused_kernel(
@@ -488,12 +608,8 @@ batched_panel_fused_kernel(
     __syncthreads();
 
     // 5. Scale and rank-1 update (in registers)
-    scalar_t reg = (rx_abs_max == static_cast<real_t>(0))
-        ? static_cast<scalar_t>(1)
-        : static_cast<scalar_t>(1) / sx[i];
-
     if (rowid > i) {
-      rA[i] *= reg;
+      rA[i] /= sx[i];
       #pragma unroll
       for (int j = i + 1; j < WIDTH; j++) {
         rA[j] -= rA[i] * sx[j];
