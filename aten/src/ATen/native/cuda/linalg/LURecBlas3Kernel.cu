@@ -542,14 +542,60 @@ bool try_launch_fused_panel_register_resident(
     batched_panel_register_resident_fused_kernel<scalar_t, W><<<grid, threads, shmem, stream>>>( \
       dA, matrix_stride, lda, m, col_start, ipiv_stride, dipiv, dinfo)
 
+  // Any nb in [1, max_recnb] can appear as the base case (from recursive halving
+  // or from the outer loop's min(nb_outer, n-j) remainder), so cover all values.
   switch (nb) {
+    case 1: LAUNCH_FUSED(1); break;
+    case 2: LAUNCH_FUSED(2); break;
+    case 3: LAUNCH_FUSED(3); break;
+    case 4: LAUNCH_FUSED(4); break;
+    case 5: LAUNCH_FUSED(5); break;
+    case 6: LAUNCH_FUSED(6); break;
+    case 7: LAUNCH_FUSED(7); break;
+    case 8: LAUNCH_FUSED(8); break;
+    case 9: LAUNCH_FUSED(9); break;
+    case 10: LAUNCH_FUSED(10); break;
+    case 11: LAUNCH_FUSED(11); break;
+    case 12: LAUNCH_FUSED(12); break;
+    case 13: LAUNCH_FUSED(13); break;
+    case 14: LAUNCH_FUSED(14); break;
+    case 15: LAUNCH_FUSED(15); break;
     case 16: LAUNCH_FUSED(16); break;
+    case 17: LAUNCH_FUSED(17); break;
+    case 18: LAUNCH_FUSED(18); break;
+    case 19: LAUNCH_FUSED(19); break;
+    case 20: LAUNCH_FUSED(20); break;
+    case 21: LAUNCH_FUSED(21); break;
+    case 22: LAUNCH_FUSED(22); break;
+    case 23: LAUNCH_FUSED(23); break;
     case 24: LAUNCH_FUSED(24); break;
+    case 25: LAUNCH_FUSED(25); break;
+    case 26: LAUNCH_FUSED(26); break;
+    case 27: LAUNCH_FUSED(27); break;
     case 28: LAUNCH_FUSED(28); break;
+    case 29: LAUNCH_FUSED(29); break;
+    case 30: LAUNCH_FUSED(30); break;
+    case 31: LAUNCH_FUSED(31); break;
     case 32: LAUNCH_FUSED(32); break;
+    case 33: LAUNCH_FUSED(33); break;
+    case 34: LAUNCH_FUSED(34); break;
+    case 35: LAUNCH_FUSED(35); break;
     case 36: LAUNCH_FUSED(36); break;
+    case 37: LAUNCH_FUSED(37); break;
+    case 38: LAUNCH_FUSED(38); break;
+    case 39: LAUNCH_FUSED(39); break;
+    case 40: LAUNCH_FUSED(40); break;
+    case 41: LAUNCH_FUSED(41); break;
+    case 42: LAUNCH_FUSED(42); break;
+    case 43: LAUNCH_FUSED(43); break;
     case 44: LAUNCH_FUSED(44); break;
+    case 45: LAUNCH_FUSED(45); break;
+    case 46: LAUNCH_FUSED(46); break;
+    case 47: LAUNCH_FUSED(47); break;
     case 48: LAUNCH_FUSED(48); break;
+    case 49: LAUNCH_FUSED(49); break;
+    case 50: LAUNCH_FUSED(50); break;
+    case 51: LAUNCH_FUSED(51); break;
     case 52: LAUNCH_FUSED(52); break;
     default: return false;
   }
