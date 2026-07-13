@@ -726,7 +726,7 @@ void lu_batched_panel_recursive(
           col_start, nb, dipiv, ipiv_stride, dinfo, batch_count)) {
       return;
     }
-    // Fallback: nrows > 1024 or nb > 32
+    // Fallback: nrows > 1024 or nb is larger than what the register-resident kernel requires
     auto grid = dim3(1, 1, batch_count);
     if ((m - col_start) > tuning.panel_threshold) {
       batched_panel_colserial_fused_kernel<scalar_t, 1024><<<grid, 1024, 0, at::cuda::getCurrentCUDAStream()>>>(
