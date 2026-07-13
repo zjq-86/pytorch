@@ -478,7 +478,6 @@ batched_panel_register_resident_fused_kernel(
         curr_row = argmax;
       }
     }
-    __syncthreads();
 
     // 5. Scale and rank-1 update (in registers)
     if (curr_row > i) {
