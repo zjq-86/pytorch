@@ -36,24 +36,35 @@ namespace {
 
 #define LinOff(i, j, lda) i + static_cast<size_t>(j) * lda
 
+// Nb values for the base case in the recursive call,
+// when dispatching to the register-resident panel LU kernel
+struct LURecnbRegisterResidentConfig {
+  int nb_float;
+  int nb_double;
+  int nb_cfloat;
+  int nb_cdouble;
+};
+
 struct LUNbConfig {
   int nb_small; // outer loop blocking factor when n < nb_crossover_n
   int nb_large; // outer loop blocking factor when n >= nb_crossover_n
 };
 
+// Global LU tuning
 struct LUTuning {
+  LURecnbRegisterResidentConfig recnb_reg; // recursive panel base-case width (rows <= 1024)
   int panel_threshold; // rows above this use block size (BS) 1024 tall-panel kernel
-  int recnb; // recursive panel base-case width (flat column-by-column below this)
+  int recnb_colserial; // recursive panel base-case width (flat column-by-column below this)
   int nb_crossover_n; // matrix size threshold: n >= this selects nb_large
   LUNbConfig nb_real; // blocking factors for float/double
   LUNbConfig nb_complex; // blocking factors for cfloat/cdouble
 };
 
 // Pre-tuned constants per compute capability
-static constexpr LUTuning tuning_sm80  = {768, 10,  512, {56, 256}, {64, 256}};  // A100 (swept 2026-07-02)
-static constexpr LUTuning tuning_sm89  = {768, 14,  512, {64, 384}, {96, 256}};  // L40S (swept 2026-07-05)
-static constexpr LUTuning tuning_sm90  = {512, 10,  512, {40, 256}, {64, 256}};  // H100 (swept 2026-07-01)
-static constexpr LUTuning tuning_sm100 = {512, 32,  512, {128, 256}, {128, 256}};  // match MAGMA nb=128 recnb=32
+static constexpr LUTuning tuning_sm80  = {{44, 44, 24, 16}, 768, 10,  512, {56, 256}, {64, 256}};  // A100 (swept 2026-07-02)
+static constexpr LUTuning tuning_sm89  = {{32, 32, 32, 32}, 768, 14,  512, {64, 384}, {96, 256}};  // L40S (swept 2026-07-05)
+static constexpr LUTuning tuning_sm90  = {{52, 36, 52, 24}, 512, 10,  512, {40, 256}, {64, 256}};  // H100 (swept 2026-07-01)
+static constexpr LUTuning tuning_sm100 = {{48, 32, 32, 28}, 512, 10,  512, {72, 256}, {64, 256}};  // match MAGMA nb=128 recnb=32
 
 inline LUTuning get_tuning() {
   const auto* prop = at::cuda::getCurrentDeviceProperties();
@@ -508,7 +519,7 @@ batched_panel_register_resident_fused_kernel(
 
 // Dispatch helper for register-resident fused panel kernel (WIDTH 1-32)
 template <typename scalar_t>
-bool try_launch_fused_panel(
+bool try_launch_fused_panel_register_resident(
   scalar_t* dA, int64_t matrix_stride, int lda, int m,
   int col_start, int nb,
   int* dipiv, int ipiv_stride,
@@ -516,7 +527,7 @@ bool try_launch_fused_panel(
 ) {
   int nrows = m - col_start;
   // Fused kernel needs one thread per row, max 1024
-  if (nrows > 1024 || nb > 32) return false;
+  if (nrows > 1024) return false;
 
   // Shared memory: WIDTH * sizeof(scalar_t) + nrows * sizeof(real_t) + nrows * sizeof(int) + WIDTH * sizeof(int)
   using real_t = c10::scalar_value_type<scalar_t>::type;
@@ -532,38 +543,14 @@ bool try_launch_fused_panel(
       dA, matrix_stride, lda, m, col_start, ipiv_stride, dipiv, dinfo)
 
   switch (nb) {
-    case  1: LAUNCH_FUSED( 1); break;
-    case  2: LAUNCH_FUSED( 2); break;
-    case  3: LAUNCH_FUSED( 3); break;
-    case  4: LAUNCH_FUSED( 4); break;
-    case  5: LAUNCH_FUSED( 5); break;
-    case  6: LAUNCH_FUSED( 6); break;
-    case  7: LAUNCH_FUSED( 7); break;
-    case  8: LAUNCH_FUSED( 8); break;
-    case  9: LAUNCH_FUSED( 9); break;
-    case 10: LAUNCH_FUSED(10); break;
-    case 11: LAUNCH_FUSED(11); break;
-    case 12: LAUNCH_FUSED(12); break;
-    case 13: LAUNCH_FUSED(13); break;
-    case 14: LAUNCH_FUSED(14); break;
-    case 15: LAUNCH_FUSED(15); break;
     case 16: LAUNCH_FUSED(16); break;
-    case 17: LAUNCH_FUSED(17); break;
-    case 18: LAUNCH_FUSED(18); break;
-    case 19: LAUNCH_FUSED(19); break;
-    case 20: LAUNCH_FUSED(20); break;
-    case 21: LAUNCH_FUSED(21); break;
-    case 22: LAUNCH_FUSED(22); break;
-    case 23: LAUNCH_FUSED(23); break;
     case 24: LAUNCH_FUSED(24); break;
-    case 25: LAUNCH_FUSED(25); break;
-    case 26: LAUNCH_FUSED(26); break;
-    case 27: LAUNCH_FUSED(27); break;
     case 28: LAUNCH_FUSED(28); break;
-    case 29: LAUNCH_FUSED(29); break;
-    case 30: LAUNCH_FUSED(30); break;
-    case 31: LAUNCH_FUSED(31); break;
     case 32: LAUNCH_FUSED(32); break;
+    case 36: LAUNCH_FUSED(36); break;
+    case 44: LAUNCH_FUSED(44); break;
+    case 48: LAUNCH_FUSED(48); break;
+    case 52: LAUNCH_FUSED(52); break;
     default: return false;
   }
   #undef LAUNCH_FUSED
@@ -671,9 +658,24 @@ void lu_batched_panel_recursive(
   LUWorkspace<scalar_t>& ws,
   const LUTuning& tuning
 ) {
+  int nrows = m - col_start;
+  int recnb;
+  if (nrows < 1024) {
+    if constexpr (std::is_same_v<float, scalar_t>) {
+      recnb = tuning.recnb_reg.nb_float;
+    } else if constexpr (std::is_same_v<double, scalar_t>) {
+      recnb = tuning.recnb_reg.nb_double;
+    } else if constexpr (std::is_same_v<std::complex<float>, scalar_t>) {
+      recnb = tuning.recnb_reg.nb_cfloat;
+    } else {
+      recnb = tuning.recnb_reg.nb_cdouble;
+    }
+  } else {
+    recnb = tuning.recnb_colserial;
+  }
   // Base case: use fused register-resident panel if possible, else fall back
-  if (nb <= tuning.recnb) {
-    if (try_launch_fused_panel<scalar_t>(
+  if (nb <= recnb) {
+    if (try_launch_fused_panel_register_resident<scalar_t>(
           dA, matrix_stride, lda, m,
           col_start, nb, dipiv, ipiv_stride, dinfo, batch_count)) {
       return;
