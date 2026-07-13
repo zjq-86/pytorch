@@ -5762,6 +5762,7 @@ class TestLinalg(TestCase):
         # scaled_residul < K, where
         # scaled_residual = ||PLU - A|| / (||A|| * n * eps)
         # Netlib uses 1-norm, while MAGMA uses Frobenius norm.
+        # NOTE: n <= 1024 decides between two panel factorization kernels
         if dtype in (torch.float, torch.double):
             compute_dtype = torch.double
         else:
@@ -5811,15 +5812,16 @@ class TestLinalg(TestCase):
                 self.assertTrue((scaled_residual < K).all())
 
         # Check info vector. Note, it is 1-based
-        A = make_well_conditioned(5, 300, 300)
-        A[0, :, 150:] = 0
-        A[2, :, :150] = 0
-        A[4, :, 17] = 0
-        _, _, info = torch.linalg.lu_factor_ex(A)
-        self.assertEqual(info[0], 151)
-        self.assertEqual(info[2], 1)
-        self.assertEqual(info[4], 18)
-        self.assertTrue(info[1] == info[3] == 0)
+        for n in (300, 1030):
+            A = make_well_conditioned(5, n, n)
+            A[0, :, 150:] = 0
+            A[2, :, :150] = 0
+            A[4, :, 17] = 0
+            _, _, info = torch.linalg.lu_factor_ex(A)
+            self.assertEqual(info[0], 151)
+            self.assertEqual(info[2], 1)
+            self.assertEqual(info[4], 18)
+            self.assertTrue(info[1] == info[3] == 0)
 
     @precisionOverride({torch.float32: 1e-2, torch.complex64: 1e-2})
     @skipCUDAIfNoCusolver
