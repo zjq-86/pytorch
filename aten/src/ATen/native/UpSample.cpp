@@ -23,7 +23,7 @@ TORCH_API c10::SmallVector<int64_t, 3> compute_output_size(
     c10::SmallVector<int64_t, 3> ret;
     for (const auto i : c10::irange(spatial_dimensions)) {
       const double odim = static_cast<double>(input_size[i+2]) * scale_factors.value()[i];
-      ret.push_back(c10::checked_convert<int64_t>(odim, "int64_t"));
+      ret.push_back(c10::wrapping_convert<int64_t>(odim, "int64_t"));
     }
     return ret;
   }

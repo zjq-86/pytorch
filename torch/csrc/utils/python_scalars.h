@@ -14,9 +14,9 @@ inline T unpackIntegral(PyObject* obj, const char* type) {
   // In Python-3.10 floats can no longer be silently converted to integers
   // Keep backward compatible behavior for now
   if (PyFloat_Check(obj)) {
-    return c10::checked_convert<T>(THPUtils_unpackDouble(obj), type);
+    return c10::wrapping_convert<T>(THPUtils_unpackDouble(obj), type);
   }
-  return c10::checked_convert<T>(THPUtils_unpackLong(obj), type);
+  return c10::wrapping_convert<T>(THPUtils_unpackLong(obj), type);
 }
 
 inline void store_scalar(void* data, at::ScalarType scalarType, PyObject* obj) {

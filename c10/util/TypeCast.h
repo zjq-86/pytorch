@@ -326,13 +326,31 @@ C10_HOST_DEVICE To convert(From f) {
 // Define separately to avoid being inlined and prevent code-size bloat
 [[noreturn]] C10_API void report_overflow(const char* name);
 
+// Range-checked conversion that PERMITS signed->unsigned two's-complement
+// wraparound (via overflows() with its default strict_unsigned=false). This
+// matches the modular arithmetic semantics of the barebones-unsigned tensor
+// dtypes and is relied on by c10::Scalar::to*(). For a strict narrowing check
+// that rejects any value not representable in To, use c10::safe_conv
+// (c10/util/safe_conv.h) instead.
 template <typename To, typename From>
-To checked_convert(From f, const char* name) {
+To wrapping_convert(From f, const char* name) {
   // Converting to bool can't overflow so we exclude this case from checking.
   if (!std::is_same_v<To, bool> && overflows<To, From>(f)) {
     report_overflow(name);
   }
   return convert<To, From>(f);
+}
+
+// Deprecated: retained only for backwards compatibility with external callers.
+// Use c10::safe_conv for a strict range-checked narrowing conversion, or
+// c10::wrapping_convert if you rely on signed->unsigned two's-complement wrap.
+template <typename To, typename From>
+[[deprecated(
+    "Use c10::safe_conv for a strict range-checked narrowing conversion, or "
+    "c10::wrapping_convert if you rely on signed->unsigned two's-complement "
+    "wraparound.")]] To
+checked_convert(From f, const char* name) {
+  return wrapping_convert<To, From>(f, name);
 }
 
 } // namespace c10

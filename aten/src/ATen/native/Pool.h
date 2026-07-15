@@ -4,6 +4,7 @@
 #include <ATen/native/DispatchStub.h>
 #include <c10/util/TypeCast.h>
 #include <c10/util/irange.h>
+#include <c10/util/safe_conv.h>
 
 #include <utility>
 
@@ -52,7 +53,7 @@ template <typename dest_t, typename src_t>
 inline dest_t
 safe_downcast(src_t v)
 {
-  return c10::checked_convert<dest_t>(v, "dest_t");
+  return c10::safe_conv<dest_t>(v);
 }
 
 template<typename T>
