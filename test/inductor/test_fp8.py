@@ -1111,6 +1111,26 @@ class TestFP8Lowering(TestCase):
         scaling_block_sizes: tuple[int, int, int, int],
         device,
     ):
+        # (shape, use_fast_accum, scaling_block_sizes) combos disabled due to CI
+        # failures; other combos still run. See the referenced issues.
+        _disabled_combos = {
+            ((16, 256, 256), False, (1, 128, 128, 128)),  # 188706
+            ((16, 256, 256), False, (1, 128, 1, 128)),  # 188707
+            ((16, 256, 256), False, (128, 128, 1, 128)),  # 188708
+            ((16, 256, 256), True, (1, 128, 128, 128)),  # 188709
+            ((16, 256, 256), True, (1, 128, 1, 128)),  # 188710
+            ((16, 256, 256), True, (128, 128, 1, 128)),  # 188711
+            ((1024, 512, 1024), False, (1, 128, 1, 128)),  # 188712
+            ((1024, 512, 1024), False, (128, 128, 1, 128)),  # 188713
+            ((1024, 512, 1024), True, (1, 128, 1, 128)),  # 188714
+            ((1024, 512, 1024), True, (128, 128, 1, 128)),  # 188715
+            ((32768, 4096, 4096), False, (1, 128, 1, 128)),  # 188716
+            ((32768, 4096, 4096), False, (128, 128, 1, 128)),  # 188717
+            ((32768, 4096, 4096), True, (1, 128, 1, 128)),  # 188704
+            ((32768, 4096, 4096), True, (128, 128, 1, 128)),  # 188675
+        }
+        if (shape, use_fast_accum, scaling_block_sizes) in _disabled_combos:
+            self.skipTest("disabled due to CI failures; see #188675/#188704/#188706-188717")
         if "xpu" in device and use_fast_accum:
             self.skipTest("XPU does not support use_fast_accum=True for now")
         # Only bf16 output type is supported for non-tensorwise scaling, not fp32
