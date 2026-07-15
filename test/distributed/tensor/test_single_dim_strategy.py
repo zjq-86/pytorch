@@ -1002,9 +1002,7 @@ class TestExpandPlaceholder(TestCase):
                 len(output_specs), 2, "Should have 2 output specs for topk"
             )
             for i, out_spec in enumerate(output_specs):
-                self.assertIsNotNone(
-                    out_spec, lambda msg: f"{msg}\nOutput {i} spec should not be None"
-                )
+                self.assertIsNotNone(out_spec, f"Output {i} spec should not be None")
                 self.assertIsInstance(out_spec, DTensorSpec)
 
             self.assertEqual(len(op_spec.input_specs), 1, "Should have 1 input tensor")
@@ -1189,7 +1187,7 @@ class TestExpandPlaceholder(TestCase):
                 self.assertEqual(
                     partial_reduce_ops,
                     {"sum", "avg"},
-                    lambda msg: f"{msg}\nFound invalid mixed partials: {partial_reduce_ops}",
+                    f"Found invalid mixed partials: {partial_reduce_ops}",
                 )
 
         # Verify that homogeneous partial strategies ARE included
@@ -1249,7 +1247,7 @@ class TestExpandPlaceholder(TestCase):
             self.assertLessEqual(
                 len(partial_types),
                 1,
-                lambda msg: f"{msg}\nShould not mix Partial subclasses: {output_spec.placements}",
+                f"Should not mix Partial subclasses: {output_spec.placements}",
             )
 
     def test_expand_allows_sum_avg_partial_mix(self):
@@ -1368,7 +1366,7 @@ class TestDijkstraExpandSingleDimStrategy(TestCase):
             pq_cost,
             ref_min_cost + 1e-9,
             msg=(
-                lambda msg: f"{msg}\nPQ cost {pq_cost} > ref min cost {ref_min_cost} for "
+                f"PQ cost {pq_cost} > ref min cost {ref_min_cost} for "
                 f"left={left_placements}, right={right_placements}"
             ),
         )
@@ -1676,7 +1674,7 @@ class TestDijkstraExpandSingleDimStrategy(TestCase):
         self.assertEqual(
             missing,
             set(),
-            lambda msg: f"{msg}\nPQ search missed {len(missing)} strategies reachable by full expansion",
+            f"PQ search missed {len(missing)} strategies reachable by full expansion",
         )
 
     def test_single_dim_transition_reachability(self):
@@ -1767,7 +1765,7 @@ class TestDijkstraExpandSingleDimStrategy(TestCase):
                     self.assertEqual(
                         visited,
                         all_placements,
-                        lambda msg: f"{msg}\ninput_idx={input_idx}, mesh_dim={mesh_dim}: "
+                        f"input_idx={input_idx}, mesh_dim={mesh_dim}: "
                         f"from {start}, unreachable: {all_placements - visited}",
                     )
 

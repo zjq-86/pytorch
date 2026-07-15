@@ -161,7 +161,6 @@ dtensor_fails = {
     xfail("sparse.mm", "reduce"),
     # meta tensor data not allocated yet during tensor_split
     xfail("tensor_split"),
-    xfail("torch.ops.aten._scaled_dot_product_flash_attention_for_cpu"),
     # /TODO(whc) debug/triage
     # ops inside this might even fail without dtensor
     # tests, as we rescale op db common test size factor (i.e. L, M, S)
@@ -353,8 +352,6 @@ dtensor_fails_no_strategy = {
     xfail("histogramdd"),
     xfail("isin"),
     xfail("linalg.matrix_power"),
-    # Full-matrix op; matrix dims can't be sharded, like matrix_exp/matrix_power.
-    xfail("linalg.matrix_sqrth"),
     xfail("linalg.polar"),
     xfail("linspace", "tensor_overload"),
     xfail("log_normal"),
@@ -859,7 +856,6 @@ ops_unbacked_dtensor_dde = {
     xfail("view"),
     xfail("view_as"),
     xfail("view_as_complex"),
-    xfail("torch.ops.aten._scaled_dot_product_flash_attention_for_cpu"),
 }
 
 
@@ -1102,7 +1098,7 @@ class TestSingleDimStrategies(DTensorOpTestBase):
                     tuple(output_placements),
                     mesh,
                 ),
-                lambda msg: f"{msg}\n{op.name}: forward {input_placements} -> {tuple(output_placements)} failed",
+                f"{op.name}: forward {input_placements} -> {tuple(output_placements)} failed",
             )
 
             bwd = validate_sharding_rule_sample_backward(
@@ -1115,7 +1111,7 @@ class TestSingleDimStrategies(DTensorOpTestBase):
             if bwd is not None:
                 self.assertTrue(
                     bwd,
-                    lambda msg: f"{msg}\n{op.name}: backward {input_placements} failed",
+                    f"{op.name}: backward {input_placements} failed",
                 )
 
 

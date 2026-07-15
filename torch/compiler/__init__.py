@@ -2,7 +2,7 @@
 import contextlib
 import io
 from collections.abc import Callable
-from typing import Any, TYPE_CHECKING, TypeVar
+from typing import Any, TypeVar
 from typing_extensions import ParamSpec
 
 import torch
@@ -10,10 +10,6 @@ from torch._higher_order_ops.invoke_subgraph import NestedCompileRegionOptions
 
 from . import config
 from ._cache import CacheInfo
-
-
-if TYPE_CHECKING:
-    from torch._dynamo.eval_frame import StanceStr
 
 
 __all__ = [
@@ -372,7 +368,7 @@ def get_default_backend() -> str | Callable[..., Any]:
 
 
 def set_stance(
-    stance: "StanceStr" = "default",
+    stance: str = "default",
     *,
     skip_guard_eval_unsafe: bool = False,
     force_backend: str | Callable[..., Any] | None = None,
@@ -517,7 +513,7 @@ def wrap_numpy(fn):
     r"""Decorator that turns a function from ``np.ndarray``\ s to ``np.ndarray``\ s into a function
     from ``torch.Tensor``\ s to ``torch.Tensor``\ s.
 
-    It is designed to be used with :func:`torch.compile` with ``fullgraph=True``. It allows you to
+    It is designed to be used with :func:`torch.compile` with ``fullgraph=True``. It allows to
     compile a NumPy function as if it were a PyTorch function. This allows you to run NumPy code
     on CUDA or compute its gradients.
 

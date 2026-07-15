@@ -87,7 +87,6 @@ See {ref}`Linear Algebra Stability` for some common numerical edge-cases.
     :nosignatures:
 
     matrix_exp
-    matrix_sqrth
     matrix_power
 ```
 

@@ -2569,12 +2569,12 @@ User code traceback:
         self.assertEqual(
             len(full_messages),
             1,
-            lambda msg: f"{msg}\nExpected 1 full graph break message, got {len(full_messages)}",
+            f"Expected 1 full graph break message, got {len(full_messages)}",
         )
         self.assertEqual(
             len(suppressed_messages),
             2,
-            lambda msg: f"{msg}\nExpected 2 suppressed messages, got {len(suppressed_messages)}",
+            f"Expected 2 suppressed messages, got {len(suppressed_messages)}",
         )
 
         self.assertExpectedInline(
@@ -2659,7 +2659,7 @@ Call to `torch._dynamo.graph_break()`
         self.assertEqual(
             len(records),
             2,
-            lambda msg: f"{msg}\nExpected 2 graph break messages (one per call site), got {len(records)}",
+            f"Expected 2 graph break messages (one per call site), got {len(records)}",
         )
 
         self.assertExpectedInline(
