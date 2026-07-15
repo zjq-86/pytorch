@@ -43,6 +43,14 @@ constexpr int SWP_WIDTH = 4;
 // Capped for smaller binary.
 constexpr int MAX_RECNB = 32;
 
+template <int LO, int HI, typename F>
+void range_dispatch(int val, F&& f) {
+  if constexpr (LO <= HI) {
+    if (val == LO) { f(std::integral_constant<int, LO>{}); }
+    else { range_dispatch<LO + 1, HI>(val, std::forward<F>(f)); }
+  }
+}
+
 // Nb values for the base case in the recursive call,
 // when dispatching to the register-resident panel LU kernel
 struct LURecnbRegisterResidentConfig {
@@ -544,49 +552,14 @@ bool try_launch_fused_panel_register_resident(
 
   auto stream = at::cuda::getCurrentCUDAStream();
 
-  #define LAUNCH_FUSED(W) \
-    batched_panel_register_resident_fused_kernel<scalar_t, W><<<grid, threads, shmem, stream>>>( \
-      dA, matrix_stride, lda, m, col_start, ipiv_stride, dipiv, dinfo)
-
   // Any nb in [1, max_recnb] can appear as the base case (from recursive halving
   // or from the outer loop's min(nb_outer, n-j) remainder), so cover all values.
-  switch (nb) {
-    case 1: LAUNCH_FUSED(1); break;
-    case 2: LAUNCH_FUSED(2); break;
-    case 3: LAUNCH_FUSED(3); break;
-    case 4: LAUNCH_FUSED(4); break;
-    case 5: LAUNCH_FUSED(5); break;
-    case 6: LAUNCH_FUSED(6); break;
-    case 7: LAUNCH_FUSED(7); break;
-    case 8: LAUNCH_FUSED(8); break;
-    case 9: LAUNCH_FUSED(9); break;
-    case 10: LAUNCH_FUSED(10); break;
-    case 11: LAUNCH_FUSED(11); break;
-    case 12: LAUNCH_FUSED(12); break;
-    case 13: LAUNCH_FUSED(13); break;
-    case 14: LAUNCH_FUSED(14); break;
-    case 15: LAUNCH_FUSED(15); break;
-    case 16: LAUNCH_FUSED(16); break;
-    case 17: LAUNCH_FUSED(17); break;
-    case 18: LAUNCH_FUSED(18); break;
-    case 19: LAUNCH_FUSED(19); break;
-    case 20: LAUNCH_FUSED(20); break;
-    case 21: LAUNCH_FUSED(21); break;
-    case 22: LAUNCH_FUSED(22); break;
-    case 23: LAUNCH_FUSED(23); break;
-    case 24: LAUNCH_FUSED(24); break;
-    case 25: LAUNCH_FUSED(25); break;
-    case 26: LAUNCH_FUSED(26); break;
-    case 27: LAUNCH_FUSED(27); break;
-    case 28: LAUNCH_FUSED(28); break;
-    case 29: LAUNCH_FUSED(29); break;
-    case 30: LAUNCH_FUSED(30); break;
-    case 31: LAUNCH_FUSED(31); break;
-    case 32: LAUNCH_FUSED(32); break;
-    default: return false;
-  }
-  #undef LAUNCH_FUSED
-
+  range_dispatch<1, MAX_RECNB>(nb, [&](auto IC) {
+    constexpr int NB = decltype(IC)::value;
+    batched_panel_register_resident_fused_kernel<scalar_t, NB><<<grid, threads, shmem, stream>>>(
+      dA, matrix_stride, lda, m, col_start, ipiv_stride, dipiv, dinfo
+    );
+  });
   C10_CUDA_KERNEL_LAUNCH_CHECK();
   return true;
 }
