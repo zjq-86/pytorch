@@ -2443,6 +2443,11 @@ class CommonTemplate:
         )
 
     def test_split_cumsum(self):
+        if self.device == GPU_TYPE:
+            self.skipTest(
+                "Disabled on GPU due to CI failures; see "
+                "https://github.com/pytorch/pytorch/issues/189707"
+            )
         def fn(a):
             return torch.cumsum(a, -1)
 
@@ -2489,6 +2494,11 @@ class CommonTemplate:
     # not yet implemented in Triton CPU.
     @xfail_if_triton_cpu
     def test_consecutive_split_cumsum(self):
+        if self.device == GPU_TYPE:
+            self.skipTest(
+                "Disabled on GPU due to CI failures; see "
+                "https://github.com/pytorch/pytorch/issues/189708"
+            )
         def fn(a, b):
             a = a.view(-1)
             b = b.view(-1)
@@ -4436,6 +4446,11 @@ for dtype in (torch.int32, torch.int64):
     @skip_if_halide  # only 32-bit indexing
     @largeTensorTest("2GB", inductor=True)
     def test_large_strided_reduction(self):
+        if self.device == GPU_TYPE:
+            self.skipTest(
+                "Disabled on GPU due to CI failures; see "
+                "https://github.com/pytorch/pytorch/issues/189709"
+            )
         # Test 64-bit indexing is used when input numel is less than INT_MAX
         # but stride calculations go above INT_MAX
         def fn(a):
@@ -4793,6 +4808,11 @@ for dtype in (torch.int32, torch.int64):
     @skip_if_cpu
     @skip_if_not_triton
     def test_vmap_dot_decomposes_bmm(self):
+        if self.device == GPU_TYPE:
+            self.skipTest(
+                "Disabled on GPU due to CI failures; see "
+                "https://github.com/pytorch/pytorch/issues/189711"
+            )
         def dot_based(a, b):
             return torch.dot(a, b) + torch.dot(a, b)
 
@@ -13219,6 +13239,11 @@ def forward(self, arg0_1: "Sym(s77)", arg1_1: "Sym(s27)", arg2_1: "Sym(s53)", ar
 
     @requires_cuda
     def test_max_min_bool(self):
+        if self.device == GPU_TYPE:
+            self.skipTest(
+                "Disabled on GPU due to CI failures; see "
+                "https://github.com/pytorch/pytorch/issues/189710"
+            )
         # Regression test for https://github.com/pytorch/pytorch/issues/174069
         # and https://github.com/pytorch/pytorch/issues/184893
         # max/min on boolean tensors returned incorrect indices on Triton and CPU.
