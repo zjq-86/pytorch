@@ -1112,11 +1112,6 @@ if(USE_ROCM)
       endif()
     endif()
 
-    # amd_smi header needed for symmetric memory (loaded at runtime via dlopen)
-    if(USE_DISTRIBUTED AND UNIX)
-      list(APPEND ROCM_INCLUDE_DIRS ${amd_smi_INCLUDE_DIR})
-    endif()
-
     # ---[ Kernel asserts
     # Kernel asserts is disabled for ROCm by default.
     # It can be turned on by turning on the env USE_ROCM_KERNEL_ASSERT to the build system.
