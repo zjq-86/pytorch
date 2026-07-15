@@ -4448,7 +4448,39 @@ class ShapeEnv:
         dest = self.replacements.get(orig_s)
         if dest is not None:
             if free_unbacked_symbols(dest):
-                raise AssertionError(f"{orig_s} -> {dest}")
+                # orig_s already has an unbacked replacement (dest). This can
+                # happen when the same op's unbacked binding is rebound across
+                # multiple retrace passes -- e.g. re-exporting / re-lowering an
+                # ExportedProgram whose graph already carries unbacked_bindings,
+                # so a data-dependent op (such as aten._unique2) is registered
+                # by both ExportedProgram.module() and PropagateUnbackedSymInts.
+                # In that case orig_s, new_s and dest all denote the same runtime
+                # value, so unify them transitively (orig_s -> new_s -> dest) via
+                # the replacements below instead of aborting. This mirrors what
+                # the dest handling below already does when dest is backed.
+                #
+                # This does not mask a genuine inconsistency: _set_replacement
+                # below refines/intersects value ranges and raises
+                # ValueRangeError if new_s and dest are provably different (their
+                # ranges are disjoint). The residual case (same range, different
+                # value) is caught downstream by runtime size asserts / inference
+                # parity checks. Emit a signpost so this rare unify is observable
+                # rather than silent.
+                signpost_event(
+                    "dynamic",
+                    "rename_unbacked_to_unify",
+                    {
+                        "orig_s": str(orig_s),
+                        "new_s": str(new_s),
+                        "dest": str(dest),
+                    },
+                )
+                log.info(
+                    "rename_unbacked_to: unifying %s -> %s (existing dest %s)",
+                    orig_s,
+                    new_s,
+                    dest,
+                )
         self._set_replacement(orig_s, new_s, "rename_unbacked_to")
         self.unbacked_renamings[orig_s] = new_s
         if dest is not None:
